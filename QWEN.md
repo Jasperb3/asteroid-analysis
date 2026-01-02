@@ -4,45 +4,38 @@
 
 This is a Python-based data analysis project focused on tracking and visualizing potentially hazardous asteroids and near-Earth objects (NEOs). The project uses NASA's NeoWs (Near Earth Object Web Service) API to collect asteroid data and generates various visualizations and analyses of close approaches to Earth.
 
-The project consists of several Python scripts that:
+The project consists of several Python modules that:
 1. Fetch asteroid data from NASA's API
-2. Analyze potentially hazardous asteroids
+2. Analyze potentially hazardous NEOs
 3. Generate visualizations of asteroid trajectories and characteristics
-4. Focus specifically on Apophis (99942 Apophis (2004 MN4)) as a case study
+4. Create reports and enrich data with orbital information
 
 ## Key Components
 
-### Scripts
+### Source Modules
 
-- **`neows.py`**: Main data collection script that fetches asteroid data from NASA's NeoWs API using a 7-day interval over a 15-year period. It processes the data and generates multiple visualizations.
-- **`dangerous_asteroids.py`**: Analyzes potentially hazardous NEOs, identifies the closest and largest asteroids, and creates scatter plots and yearly trend visualizations.
-- **`apophis.py`**: Specialized analysis focusing on asteroid Apophis, comparing it with other hazardous NEOs.
-- **`close_approaches.py`**: Detailed analysis of Apophis close approaches, highlighting the closest approach event.
+- **`src/asteroid_analysis/build.py`**: Main data processing module that processes raw asteroid data, performs data cleaning, and creates objects and approaches dataframes with derived features like logarithmic transformations.
+- **`src/asteroid_analysis/reports.py`**: Generates various reports and visualizations including monthly miss distance quantiles, ECDF plots, and calendar heatmaps.
+- **`src/asteroid_analysis/features.py`**: Contains functions for feature engineering, including binning and ranking of asteroid characteristics.
+- **`src/asteroid_analysis/ingest.py`**: Handles data ingestion from NASA API with caching and chunking capabilities.
+- **`src/asteroid_analysis/enrich_orbits.py`**: Fetches and enriches asteroid data with orbital information from NASA's API.
+- **`src/asteroid_analysis/app.py`**: Main application entry point that orchestrates the data processing pipeline.
 
 ### Data Files
 
-- **`asteroid_data_full.csv`**: Large dataset (54,612+ records) containing comprehensive asteroid information including:
-  - Identification data (name, ID, JPL URL)
-  - Physical characteristics (diameter, absolute magnitude)
-  - Hazard classification (potentially hazardous, sentry object)
-  - Close approach data (date, velocity, miss distance)
-  - Orbital information
+- **`data/processed/`**: Directory containing processed data in parquet format (objects, approaches, orbits).
+- **`tests/fixtures/asteroid_data_sample.csv`**: Sample data used for testing purposes.
 
-### Generated Visualizations
+### Generated Outputs
 
-- **`asteroid_trajectories.png`**: Plot showing asteroid close approach distances over 15 years
-- **`asteroid_size_vs_distance.png`**: Scatter plot of asteroid size vs. miss distance
-- **`asteroid_analysis_dashboard.png`**: Multi-panel dashboard with various analyses
-- **`hazardous_neos_scatter.png`**: Scatter plot of hazardous NEOs
-- **`hazardous_neos_yearly.png`**: Yearly count of hazardous NEO approaches
-- **`apophis_close_approaches.png`**: Close approaches visualization for Apophis
-- **`apophis_comparison.png`**: Comparison of Apophis with other hazardous NEOs
+- **`outputs/reports/`**: Directory containing generated reports and visualizations.
 
 ## Dependencies
 
 The project uses several Python libraries:
 - `pandas` - For data manipulation and analysis
-- `matplotlib` - For generating visualizations
+- `matplotlib` - For generating static visualizations
+- `plotly` - For generating interactive visualizations
 - `requests` - For API calls to NASA
 - `tqdm` - For progress bars during data collection
 
@@ -60,45 +53,58 @@ The project uses several Python libraries:
 
 2. Install required packages (if not already installed):
    ```bash
-   pip install pandas matplotlib requests tqdm
+   pip install -r requirements.txt
+   # or if using pyproject.toml:
+   pip install -e .
    ```
 
 ### Running the Analysis
 
-1. **Collect new data from NASA API**:
+1. **Ingest new data from NASA API**:
    ```bash
-   python neows.py
+   python -m asteroid_analysis.ingest
    ```
-   This will fetch asteroid data for the next 15 years and save it to `asteroid_data_full.csv`.
 
-2. **Analyze dangerous asteroids**:
+2. **Build processed data tables**:
    ```bash
-   python dangerous_asteroids.py
+   python -m asteroid_analysis.build
    ```
-   This will analyze the dataset and generate visualizations.
 
-3. **Run Apophis-specific analysis**:
+3. **Enrich with orbital data**:
    ```bash
-   python apophis.py
-   python close_approaches.py
+   python -m asteroid_analysis.enrich_orbits
    ```
+
+4. **Generate reports**:
+   ```bash
+   python -m asteroid_analysis.reports
+   ```
+
+### Running Tests
+
+To run all tests:
+```bash
+pytest
+```
+
+To run tests with verbose output:
+```bash
+pytest -v
+```
+
+## Development Conventions
+
+- The codebase follows standard Python conventions with type hints
+- Tests are organized in the `tests/` directory with one test file per module
+- Configuration is handled through command-line arguments using argparse
+- Logging is implemented throughout the modules for debugging and monitoring
+- Error handling includes retries for API calls with exponential backoff
+- Data is stored in parquet format for efficient processing and storage
 
 ## Data Structure
 
-The main dataset (`asteroid_data_full.csv`) contains the following columns:
-- `date`: Date of observation
-- `id`: Asteroid ID
-- `name`: Asteroid name
-- `is_potentially_hazardous_asteroid`: Boolean indicating hazard status
-- `diameter_km_min/max`: Estimated diameter range in kilometers
-- `close_approach_date`: Date of close approach
-- `miss_distance_km`: Distance from Earth in kilometers
-- `velocity_km_h`: Velocity in km/h
-- And many other fields with orbital and physical characteristics
+The main data processing pipeline creates two primary datasets:
+- **Objects**: Contains unique asteroid information (diameter, hazard status, etc.)
+- **Approaches**: Contains individual close approach events with associated object data
 
-## Development Notes
-
-- All visualization scripts use `matplotlib.use('Agg')` to ensure non-interactive backend for headless environments
-- The project includes comprehensive logging and progress indicators
-- Data preprocessing includes type conversion and error handling
-- Visualizations are saved as high-resolution PNG files (300 DPI) for publication quality
+The processed data includes derived features like logarithmic transformations of distance and diameter, binned categorical variables, and ranking scores for analysis.

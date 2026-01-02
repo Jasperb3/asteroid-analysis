@@ -1,0 +1,11 @@
+date,id,neo_reference_id,name,nasa_jpl_url,absolute_magnitude_h,is_potentially_hazardous_asteroid,is_sentry_object,diameter_km_min,diameter_km_max,diameter_m_min,diameter_m_max,close_approach_date,close_approach_date_full,epoch_date_close_approach,velocity_km_s,velocity_km_h,velocity_mph,miss_distance_astronomical,miss_distance_lunar,miss_distance_km,miss_distance_miles,orbiting_body
+2029-01-05,1001,2001,Test A,http://example.com/a,22.1,True,False,0.1,0.2,100,200,2029-01-05,2029-01-05 00:00,1234567890,12.3,44280,27514,0.01,3.9,1500000,932000,Earth
+2029-01-05,1001,2001,Test A,http://example.com/a,22.1,True,False,0.1,0.2,100,200,2029-01-05,2029-01-05 00:00,1234567890,12.3,44280,27514,0.01,3.9,1500000,932000,Earth
+2029-01-20,1002,2002,Test B,http://example.com/b,24.0,False,False,0.0,0.0,0,0,2029-01-20,,1234567891,8.5,30600,19011,0.02,7.8,3000000,1864000,Earth
+2029-02-10,1003,2003,Test C,http://example.com/c,19.5,True,True,0.5,0.9,500,900,2029-02-10,2029-02-10 12:00,1234567892,22.1,79560,49430,0.005,1.9,750000,466000,Earth
+2029-02-25,1004,2004,Test D,http://example.com/d,27.0,False,False,0.02,0.05,20,50,2029-02-25,2029-02-25 23:59,1234567893,15.0,54000,33554,0.03,11.7,4500000,2796000,Earth
+2029-03-03,1005,2005,Test E,http://example.com/e,21.0,True,False,0.2,0.3,200,300,2029-03-03,2029-03-03 00:00,1234567894,18.4,66240,41154,0.015,5.8,2200000,1367000,Mars
+2029-03-15,1006,2006,Test F,http://example.com/f,23.5,False,False,0.05,0.08,50,80,2029-03-15,2029-03-15 00:00,1234567895,9.9,35640,22145,0.025,9.7,3700000,2299000,Earth
+2029-03-30,1007,2007,Test G,http://example.com/g,20.0,True,False,0.4,0.6,400,600,2029-03-30,2029-03-30 00:00,1234567896,25.0,90000,55923,0.004,1.6,600000,372800,Earth
+2029-04-10,1008,2008,Test H,http://example.com/h,26.5,False,True,0.01,0.02,10,20,2029-04-10,2029-04-10 00:00,1234567897,7.5,27000,16777,0.04,15.6,6000000,3728000,Earth
+2029-04-25,1009,2009,Test I,http://example.com/i,18.0,True,False,1.2,1.5,1200,1500,2029-04-25,2029-04-25 00:00,1234567898,30.0,108000,67108,0.002,0.8,300000,186000,Earth
