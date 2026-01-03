@@ -8,6 +8,7 @@ from asteroid_analysis import ingest
 from asteroid_analysis import build as build_mod
 from asteroid_analysis import reports as reports_mod
 from asteroid_analysis import enrich_orbits
+from asteroid_analysis import learning_reports
 
 
 def _default_dates():
@@ -38,12 +39,16 @@ def _require_path(path: Path, label: str):
         raise SystemExit(2)
 
 
+def _parse_date(value: str):
+    return datetime.strptime(value, "%Y-%m-%d")
+
+
 def fetch_cmd(args):
     _require_api_key()
     start_date, end_date = _default_dates()
     if args.start and args.end:
-        start_date = datetime.strptime(args.start, "%Y-%m-%d").date()
-        end_date = datetime.strptime(args.end, "%Y-%m-%d").date()
+        start_date = _parse_date(args.start).date()
+        end_date = _parse_date(args.end).date()
 
     ingest.ingest(
         start_date=start_date,
@@ -95,6 +100,30 @@ def serve_cmd(_args):
     )
 
 
+def learning_cmd(args):
+    as_of_date = _parse_date(args.as_of_date) if args.as_of_date else None
+    learning_reports.build_learning_reports(
+        outdir=Path(args.learning_outdir),
+        data_dir=Path(args.data_dir),
+        orbiting_body=args.orbiting_body,
+        as_of_date=as_of_date,
+    )
+    _print_summary(
+        [
+            ("Learning dir", args.learning_outdir),
+            ("Watchlist", Path(args.learning_outdir) / "watchlist_next_90_days.csv"),
+            (
+                "Near misses",
+                Path(args.learning_outdir) / "near_misses_under_5LD.html",
+            ),
+            (
+                "Interpretation notes",
+                Path(args.learning_outdir) / "interpretation_notes.md",
+            ),
+        ]
+    )
+
+
 def enrich_cmd(args):
     _require_api_key()
     _require_path(Path(args.processed_dir) / "objects.parquet", "objects.parquet")
@@ -111,8 +140,8 @@ def all_cmd(args):
     _require_api_key()
     start_date, end_date = _default_dates()
     if args.start and args.end:
-        start_date = datetime.strptime(args.start, "%Y-%m-%d").date()
-        end_date = datetime.strptime(args.end, "%Y-%m-%d").date()
+        start_date = _parse_date(args.start).date()
+        end_date = _parse_date(args.end).date()
 
     csv_path = Path(args.out)
     ingest.ingest(
@@ -127,12 +156,20 @@ def all_cmd(args):
     reports_mod.build_reports(
         Path(args.reports_dir), args.orbiting_body, Path(args.processed_dir)
     )
+    as_of_date = _parse_date(args.as_of_date) if args.as_of_date else None
+    learning_reports.build_learning_reports(
+        outdir=Path(args.learning_outdir),
+        data_dir=Path(args.processed_dir),
+        orbiting_body=args.orbiting_body,
+        as_of_date=as_of_date,
+    )
 
     _print_summary(
         [
             ("CSV", csv_path),
             ("Processed dir", args.processed_dir),
             ("Reports dir", args.reports_dir),
+            ("Learning dir", args.learning_outdir),
         ]
     )
 
@@ -164,6 +201,17 @@ def main():
     serve_parser = subparsers.add_parser("serve", help="Launch Streamlit app.")
     serve_parser.set_defaults(func=serve_cmd)
 
+    learning_parser = subparsers.add_parser(
+        "learning", help="Generate learning-focused reports."
+    )
+    learning_parser.add_argument("--learning-outdir", default="outputs/learning")
+    learning_parser.add_argument("--orbiting-body", default="Earth")
+    learning_parser.add_argument("--data-dir", default="data/processed")
+    learning_parser.add_argument(
+        "--as-of-date", help="Anchor date for watchlist (YYYY-MM-DD)."
+    )
+    learning_parser.set_defaults(func=learning_cmd)
+
     enrich_parser = subparsers.add_parser(
         "enrich-orbits", help="Fetch orbit data for known objects."
     )
@@ -181,6 +229,10 @@ def main():
     all_parser.add_argument("--raw-dir", default="data/raw")
     all_parser.add_argument("--processed-dir", default="data/processed")
     all_parser.add_argument("--reports-dir", default="outputs/reports")
+    all_parser.add_argument("--learning-outdir", default="outputs/learning")
+    all_parser.add_argument(
+        "--as-of-date", help="Anchor date for watchlist (YYYY-MM-DD)."
+    )
     all_parser.add_argument("--refresh", action="store_true")
     all_parser.set_defaults(func=all_cmd)
 

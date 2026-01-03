@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from asteroid_analysis.metadata import build_metadata, write_metadata
+from asteroid_analysis.metadata import build_metadata, write_metadata, _hash_file
 from asteroid_analysis.features import enrich
 REQUIRED_COLUMNS = [
     "date",
@@ -245,14 +245,17 @@ def compute_aggregates(approaches: pd.DataFrame, objects: pd.DataFrame) -> pd.Da
 def _handle_duplicates(approaches: pd.DataFrame) -> pd.DataFrame:
     duplicate_mask = approaches.duplicated("approach_id", keep=False)
     if not duplicate_mask.any():
+        approaches.attrs["duplicate_approach_id_count"] = 0
         return approaches
 
     duplicate_ids = approaches.loc[duplicate_mask, "approach_id"].unique()
+    duplicate_id_count = int(len(duplicate_ids))
     sample_ids = ", ".join(list(duplicate_ids)[:3])
     print(
-        f"Warning: {len(duplicate_ids)} duplicate approach_id values detected. "
+        f"Warning: {duplicate_id_count} duplicate approach_id values detected. "
         f"Samples: {sample_ids}"
     )
+    approaches.attrs["duplicate_approach_id_count"] = duplicate_id_count
 
     exact_dupes = approaches.duplicated(keep="first")
     if exact_dupes.any():
@@ -288,10 +291,15 @@ def build_tables(input_path: Path, outdir: Path):
     aggregates_path = outdir / "aggregates.parquet"
     aggregates.to_parquet(aggregates_path, index=False)
 
+    input_hash = _hash_file(input_path)
+    duplicate_count = int(approaches.attrs.get("duplicate_approach_id_count", 0))
     metadata = build_metadata(
         df=approaches,
         input_path=input_path,
         orbiting_body_filter="all",
+        input_csv_hash=input_hash,
+        raw_cache_dir=str(Path("data/raw")),
+        duplicate_approach_id_count=duplicate_count,
     )
     metadata_path = outdir / "metadata.json"
     write_metadata(metadata, metadata_path)

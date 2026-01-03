@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 from pathlib import Path
+import json
 
 import pandas as pd
 import plotly.express as px
@@ -73,11 +74,15 @@ def load_dataframes(data_dir: Path):
 
     objects = pd.read_parquet(objects_path)
     approaches = pd.read_parquet(approaches_path)
+    object_cols = [col for col in REQUIRED_OBJECT_COLUMNS if col not in approaches.columns]
     merged = approaches.merge(
-        objects[REQUIRED_OBJECT_COLUMNS],
+        objects[["id"] + object_cols],
         on="id",
         how="left",
     )
+    for col in ["is_potentially_hazardous_asteroid", "is_sentry_object"]:
+        if col not in merged.columns and col in objects.columns:
+            merged = merged.merge(objects[["id", col]], on="id", how="left")
 
     orbits = None
     if orbits_path.exists():
@@ -94,6 +99,35 @@ def load_dataframes(data_dir: Path):
 @st.cache_data(show_spinner="Loading data...")
 def load_data(data_dir: Path, mtimes):
     return load_dataframes(data_dir)
+
+
+@st.cache_data(show_spinner=False)
+def sample_plot_data(df: pd.DataFrame, mode: str, sample_n: int) -> pd.DataFrame:
+    if mode == "Off":
+        return df
+    if df.empty:
+        return df
+    if mode == "Uniform sample N":
+        if len(df) <= sample_n:
+            return df
+        return df.sample(n=sample_n, random_state=42)
+    if mode == "Stratified by hazard + size_bin_m":
+        if "size_bin_m" not in df.columns:
+            return df
+        groups = df.groupby(
+            ["is_potentially_hazardous_asteroid", "size_bin_m"],
+            dropna=False,
+            observed=False,
+        )
+        parts = []
+        per_group = max(1, sample_n // max(1, groups.ngroups))
+        for _, group in groups:
+            if len(group) <= per_group:
+                parts.append(group)
+            else:
+                parts.append(group.sample(n=per_group, random_state=42))
+        return pd.concat(parts, ignore_index=True)
+    return df
 
 
 def build_monthly_heatmap(df: pd.DataFrame) -> go.Figure:
@@ -167,6 +201,18 @@ def main():
     if st.sidebar.button("Clear app cache"):
         st.cache_data.clear()
         st.rerun()
+
+    metadata_path = DATA_DIR / "metadata.json"
+    if metadata_path.exists():
+        try:
+            metadata = json.loads(metadata_path.read_text())
+            duplicate_count = int(metadata.get("duplicate_approach_id_count", 0) or 0)
+            if duplicate_count > 0:
+                st.sidebar.warning(
+                    f"{duplicate_count} duplicate approach_id values detected in processed data."
+                )
+        except json.JSONDecodeError:
+            pass
 
     min_date = merged["close_approach_date"].min()
     max_date = merged["close_approach_date"].max()
@@ -298,6 +344,19 @@ def main():
         st.warning("No data matches the current filters.")
         st.stop()
 
+    st.sidebar.header("Sampling")
+    sampling_mode = st.sidebar.selectbox(
+        "Scatter sampling mode",
+        ["Off", "Uniform sample N", "Stratified by hazard + size_bin_m"],
+    )
+    sample_n = st.sidebar.number_input(
+        "Sample size (points)",
+        min_value=500,
+        max_value=20000,
+        value=5000,
+        step=500,
+    )
+
     pre_counts = {
         "total_approaches": len(merged),
         "unique_objects": merged["id"].nunique(),
@@ -392,10 +451,10 @@ def main():
                     arrowhead=2,
                 )
                 st.warning("Latest month is incomplete; interpret trends with caution.")
-        st.plotly_chart(line_fig, use_container_width=True)
+        st.plotly_chart(line_fig, width="stretch")
 
         st.subheader("Monthly heatmap")
-        st.plotly_chart(build_monthly_heatmap(filtered), use_container_width=True)
+        st.plotly_chart(build_monthly_heatmap(filtered), width="stretch")
 
         st.subheader("Hazard rate by size bin")
         if use_aggregates:
@@ -419,7 +478,7 @@ def main():
             labels={"hazard_rate": "Hazard rate", "size_bin_m": "Size bin"},
         )
         bar_fig.update_layout(height=350, margin=dict(l=40, r=20, t=30, b=40))
-        st.plotly_chart(bar_fig, use_container_width=True)
+        st.plotly_chart(bar_fig, width="stretch")
 
         if orbits is not None and "orbit_class_name" in filtered.columns:
             st.subheader("Orbit class mix")
@@ -435,17 +494,22 @@ def main():
                 labels={"orbit_class_name": "Orbit class"},
             )
             orbit_fig.update_layout(height=350, margin=dict(l=40, r=20, t=30, b=40))
-            st.plotly_chart(orbit_fig, use_container_width=True)
+            st.plotly_chart(orbit_fig, width="stretch")
 
     with tab_size:
         st.subheader("Size vs Distance")
-        show_density = st.checkbox("Show density instead of points", value=False)
+        show_density_default = len(filtered) > 10000
+        show_density = st.checkbox(
+            "Show density instead of points",
+            value=show_density_default,
+        )
         top_n = st.number_input("Top N labeled points", min_value=5, max_value=100, value=20)
 
-        plot_df = filtered.copy()
-        plot_df = plot_df[
-            (plot_df["miss_distance_km"] > 0) & (plot_df["diameter_mid_km"] > 0)
+        base_df = filtered.copy()
+        base_df = base_df[
+            (base_df["miss_distance_km"] > 0) & (base_df["diameter_mid_km"] > 0)
         ]
+        plot_df = sample_plot_data(base_df, sampling_mode, int(sample_n))
 
         if show_density:
             fig = px.density_heatmap(
@@ -481,8 +545,8 @@ def main():
         fig.update_yaxes(type="log", title="Diameter mid (km)")
         fig.update_layout(height=500, margin=dict(l=40, r=20, t=30, b=40))
 
-        closest = plot_df.nsmallest(top_n, "miss_distance_km")
-        largest = plot_df.nlargest(top_n, "diameter_mid_km")
+        closest = base_df.nsmallest(top_n, "miss_distance_km")
+        largest = base_df.nlargest(top_n, "diameter_mid_km")
         for label_df, label in [(closest, "Closest"), (largest, "Largest")]:
             fig.add_trace(
                 go.Scatter(
@@ -497,7 +561,7 @@ def main():
                 )
             )
 
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
     with tab_rank:
         st.subheader("Rankings")
@@ -573,7 +637,7 @@ def main():
                 showarrow=True,
                 arrowhead=2,
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
 
     with tab_reports:
         st.subheader("Generate static reports")
@@ -590,6 +654,9 @@ def main():
         df=filtered,
         input_path=Path("data/processed/approaches.parquet"),
         orbiting_body_filter=orbiting_body,
+        input_csv_hash="",
+        raw_cache_dir=str(Path("data/raw")),
+        duplicate_approach_id_count=0,
     )
     write_metadata(metadata, Path("outputs/metadata.json"))
 

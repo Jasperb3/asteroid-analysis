@@ -41,6 +41,22 @@ SCHEMA_COLUMNS = [
 ]
 
 
+class FetchError(RuntimeError):
+    def __init__(
+        self,
+        message: str,
+        category: str = "unknown",
+        http_status: int | None = None,
+        retry_attempt: int | None = None,
+        max_retries: int | None = None,
+    ):
+        super().__init__(message)
+        self.category = category
+        self.http_status = http_status
+        self.retry_attempt = retry_attempt
+        self.max_retries = max_retries
+
+
 def chunk_date_ranges(start_date: date, end_date: date, days: int = 7):
     current = start_date
     while current <= end_date:
@@ -61,7 +77,12 @@ def fetch_chunk(session: requests.Session, start_date: date, end_date: date, api
             response = session.get(FEED_URL, params=params, timeout=30)
         except requests.RequestException as exc:
             if attempt == max_retries:
-                raise RuntimeError(f"Request error: {exc}") from exc
+                raise FetchError(
+                    f"Request error: {exc}",
+                    category="network",
+                    retry_attempt=attempt,
+                    max_retries=max_retries,
+                ) from exc
             time.sleep(2**attempt)
             continue
 
@@ -69,26 +90,64 @@ def fetch_chunk(session: requests.Session, start_date: date, end_date: date, api
             return response.json()
         if response.status_code == 429 or 500 <= response.status_code < 600:
             if attempt == max_retries:
-                raise RuntimeError(
-                    f"API error {response.status_code}: {response.text}"
+                category = "throttle" if response.status_code == 429 else "unknown"
+                raise FetchError(
+                    f"API error {response.status_code}: {response.text}",
+                    category=category,
+                    http_status=response.status_code,
+                    retry_attempt=attempt,
+                    max_retries=max_retries,
                 )
             time.sleep(2**attempt)
             continue
-        raise RuntimeError(f"API error {response.status_code}: {response.text}")
+        raise FetchError(
+            f"API error {response.status_code}: {response.text}",
+            category="unknown",
+            http_status=response.status_code,
+            retry_attempt=attempt,
+            max_retries=max_retries,
+        )
 
 
 def _write_failure(
-    raw_dir: Path, start_date: date | None, end_date: date | None, error: str
+    raw_dir: Path,
+    start_date: date | None,
+    end_date: date | None,
+    error: str,
+    category: str = "unknown",
+    http_status: int | None = None,
+    retry_attempt: int | None = None,
+    max_retries: int | None = None,
 ):
     failures_path = raw_dir / "failures.csv"
     write_header = not failures_path.exists()
     with failures_path.open("a", newline="") as handle:
         writer = csv.writer(handle)
         if write_header:
-            writer.writerow(["start_date", "end_date", "error"])
+            writer.writerow(
+                [
+                    "start_date",
+                    "end_date",
+                    "error",
+                    "category",
+                    "http_status",
+                    "retry_attempt",
+                    "max_retries",
+                ]
+            )
         start_value = start_date.isoformat() if start_date else ""
         end_value = end_date.isoformat() if end_date else ""
-        writer.writerow([start_value, end_value, error])
+        writer.writerow(
+            [
+                start_value,
+                end_value,
+                error,
+                category,
+                http_status if http_status is not None else "",
+                retry_attempt if retry_attempt is not None else "",
+                max_retries if max_retries is not None else "",
+            ]
+        )
 
 
 def _parse_chunk_range_from_path(cache_path: Path):
@@ -123,7 +182,7 @@ def _read_cache_payload(
     except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         error = f"Corrupt cache JSON {cache_path}: {exc}"
         print(error)
-        _write_failure(raw_dir, start_date, end_date, error)
+        _write_failure(raw_dir, start_date, end_date, error, category="corrupt-cache")
         return None
 
     try:
@@ -131,7 +190,7 @@ def _read_cache_payload(
     except ValueError as exc:
         error = f"Invalid cache schema {cache_path}: {exc}"
         print(error)
-        _write_failure(raw_dir, start_date, end_date, error)
+        _write_failure(raw_dir, start_date, end_date, error, category="schema-error")
         return None
 
     return payload
@@ -164,7 +223,25 @@ def fetch_or_load_chunk(
         _validate_payload(payload)
     except Exception as exc:
         print(f"Failed chunk {start_date}..{end_date}: {exc}")
-        _write_failure(raw_dir, start_date, end_date, str(exc))
+        category = "unknown"
+        http_status = None
+        retry_attempt = None
+        max_retries = None
+        if isinstance(exc, FetchError):
+            category = exc.category
+            http_status = exc.http_status
+            retry_attempt = exc.retry_attempt
+            max_retries = exc.max_retries
+        _write_failure(
+            raw_dir,
+            start_date,
+            end_date,
+            str(exc),
+            category=category,
+            http_status=http_status,
+            retry_attempt=retry_attempt,
+            max_retries=max_retries,
+        )
         return None
 
     _write_cache_atomic(cache_path, payload)

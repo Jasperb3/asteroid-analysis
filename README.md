@@ -122,6 +122,7 @@ python -m asteroid_analysis.learning_reports --data-dir data/processed --outdir 
 ```
 
 Outputs include a 90-day watchlist, near-miss storyboard, hazard vs size bins, and interpretation notes.
+If `orbits.parquet` is present, the watchlist includes orbit class and MOID, and an extra MOID vs miss-distance report is produced.
 
 ### Optional Orbit Enrichment
 
@@ -138,7 +139,13 @@ streamlit run src/asteroid_analysis/app.py
 ### One-Command Pipeline
 
 ```bash
-python -m asteroid_analysis.cli all --start 2024-01-01 --end 2039-12-31 --orbiting-body Earth --raw-dir data/raw --processed-dir data/processed --reports-dir outputs/reports
+python -m asteroid_analysis.cli all --start 2024-01-01 --end 2039-12-31 --orbiting-body Earth --raw-dir data/raw --processed-dir data/processed --reports-dir outputs/reports --learning-outdir outputs/learning --as-of-date 2029-01-01
+```
+
+### Education Mode (CLI)
+
+```bash
+python -m asteroid_analysis.cli all --start 2024-01-01 --end 2039-12-31 --orbiting-body Earth --raw-dir data/raw --processed-dir data/processed --reports-dir outputs/reports --learning-outdir outputs/learning --as-of-date 2029-01-01
 ```
 
 ## Development
@@ -175,7 +182,7 @@ python -m asteroid_analysis.reports --outdir outputs/reports --orbiting-body Ear
 Pipeline CLI:
 
 ```bash
-python -m asteroid_analysis.cli all --start 2024-01-01 --end 2039-12-31 --orbiting-body Earth --raw-dir data/raw --processed-dir data/processed --reports-dir outputs/reports
+python -m asteroid_analysis.cli all --start 2024-01-01 --end 2039-12-31 --orbiting-body Earth --raw-dir data/raw --processed-dir data/processed --reports-dir outputs/reports --learning-outdir outputs/learning --as-of-date 2029-01-01
 ```
 
 ## Data Structure
@@ -194,6 +201,7 @@ The main dataset (`asteroid_data_full.csv`) contains the following information f
 - Object-level rows: the `objects` table in `data/processed/objects.*` is deduplicated by `id`.
 - Counts: “approaches” counts are based on the approach table; “objects” counts are based on unique object ids.
 - Metadata: `data/processed/metadata.json` and `outputs/metadata.json` capture run context and coverage.
+- Metadata includes input hashes, raw cache paths, and duplicate approach_id counts for reproducibility.
 
 ## Visualizations
 

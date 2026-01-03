@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from datetime import date
 from pathlib import Path
 
@@ -49,6 +50,16 @@ def load_joined(data_dir: Path) -> pd.DataFrame:
     return merged
 
 
+def load_metadata(data_dir: Path) -> dict:
+    metadata_path = data_dir / "metadata.json"
+    if not metadata_path.exists():
+        return {}
+    try:
+        return json.loads(metadata_path.read_text())
+    except json.JSONDecodeError:
+        return {}
+
+
 def compute_monthly_quantiles(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df["month"] = df["close_approach_date"].dt.to_period("M").dt.to_timestamp()
@@ -78,7 +89,10 @@ def compute_ecdf(series: pd.Series) -> pd.DataFrame:
 
 
 def plot_quantiles_png(
-    quantiles: pd.DataFrame, output_path: Path, last_date: pd.Timestamp | None
+    quantiles: pd.DataFrame,
+    output_path: Path,
+    last_date: pd.Timestamp | None,
+    duplicate_count: int,
 ) -> None:
     plt.figure(figsize=(11, 6))
 
@@ -110,6 +124,15 @@ def plot_quantiles_png(
                 ha="left",
                 va="top",
             )
+    if duplicate_count > 0:
+        plt.figtext(
+            0.01,
+            0.01,
+            f"Note: {duplicate_count} duplicate approach_id values detected.",
+            ha="left",
+            va="bottom",
+            fontsize=8,
+        )
     plt.legend()
     plt.tight_layout()
     plt.savefig(output_path, dpi=300)
@@ -117,7 +140,10 @@ def plot_quantiles_png(
 
 
 def plot_quantiles_html(
-    quantiles: pd.DataFrame, output_path: Path, last_date: pd.Timestamp | None
+    quantiles: pd.DataFrame,
+    output_path: Path,
+    last_date: pd.Timestamp | None,
+    duplicate_count: int,
 ) -> None:
     fig = go.Figure()
     for label, group in quantiles.groupby("is_potentially_hazardous_asteroid"):
@@ -160,10 +186,25 @@ def plot_quantiles_html(
                 showarrow=True,
                 arrowhead=2,
             )
+    if duplicate_count > 0:
+        fig.add_annotation(
+            x=0.01,
+            y=0.01,
+            xref="paper",
+            yref="paper",
+            text=f"Note: {duplicate_count} duplicate approach_id values detected.",
+            showarrow=False,
+            align="left",
+        )
     fig.write_html(output_path)
 
 
-def plot_ecdf_png(hazard: pd.Series, non_hazard: pd.Series, output_path: Path) -> None:
+def plot_ecdf_png(
+    hazard: pd.Series,
+    non_hazard: pd.Series,
+    output_path: Path,
+    duplicate_count: int,
+) -> None:
     hazard_ecdf = compute_ecdf(hazard)
     non_hazard_ecdf = compute_ecdf(non_hazard)
 
@@ -176,11 +217,25 @@ def plot_ecdf_png(hazard: pd.Series, non_hazard: pd.Series, output_path: Path) -
     plt.ylabel("ECDF")
     plt.legend()
     plt.tight_layout()
+    if duplicate_count > 0:
+        plt.figtext(
+            0.01,
+            0.01,
+            f"Note: {duplicate_count} duplicate approach_id values detected.",
+            ha="left",
+            va="bottom",
+            fontsize=8,
+        )
     plt.savefig(output_path, dpi=300)
     plt.close()
 
 
-def plot_ecdf_html(hazard: pd.Series, non_hazard: pd.Series, output_path: Path) -> None:
+def plot_ecdf_html(
+    hazard: pd.Series,
+    non_hazard: pd.Series,
+    output_path: Path,
+    duplicate_count: int,
+) -> None:
     hazard_ecdf = compute_ecdf(hazard)
     non_hazard_ecdf = compute_ecdf(non_hazard)
 
@@ -195,6 +250,16 @@ def plot_ecdf_html(hazard: pd.Series, non_hazard: pd.Series, output_path: Path) 
     )
     fig.update_xaxes(type="log", title="Miss distance (km, log scale)")
     fig.update_layout(title="ECDF of Miss Distance", height=450, margin=dict(l=40, r=20, t=50, b=40))
+    if duplicate_count > 0:
+        fig.add_annotation(
+            x=0.01,
+            y=0.01,
+            xref="paper",
+            yref="paper",
+            text=f"Note: {duplicate_count} duplicate approach_id values detected.",
+            showarrow=False,
+            align="left",
+        )
     fig.write_html(output_path)
 
 
@@ -229,6 +294,8 @@ def plot_weekly_heatmap_html(df: pd.DataFrame, output_path: Path) -> None:
 
 def build_reports(outdir: Path, orbiting_body: str, data_dir: Path = DEFAULT_DATA_DIR) -> None:
     df = load_joined(data_dir)
+    metadata = load_metadata(data_dir)
+    duplicate_count = int(metadata.get("duplicate_approach_id_count", 0) or 0)
     df = df[df["orbiting_body"] == orbiting_body]
     df = df.dropna(subset=["close_approach_date", "miss_distance_km"])
     df = enrich(df)
@@ -243,13 +310,23 @@ def build_reports(outdir: Path, orbiting_body: str, data_dir: Path = DEFAULT_DAT
 
     quantiles = compute_monthly_quantiles(df)
     last_date = df["close_approach_date"].max()
-    plot_quantiles_png(quantiles, outdir / "miss_distance_quantiles.png", last_date)
-    plot_quantiles_html(quantiles, outdir / "miss_distance_quantiles.html", last_date)
+    plot_quantiles_png(
+        quantiles,
+        outdir / "miss_distance_quantiles.png",
+        last_date,
+        duplicate_count,
+    )
+    plot_quantiles_html(
+        quantiles,
+        outdir / "miss_distance_quantiles.html",
+        last_date,
+        duplicate_count,
+    )
 
     hazard = df[df["is_potentially_hazardous_asteroid"]]["miss_distance_km"]
     non_hazard = df[~df["is_potentially_hazardous_asteroid"]]["miss_distance_km"]
-    plot_ecdf_png(hazard, non_hazard, outdir / "miss_distance_ecdf.png")
-    plot_ecdf_html(hazard, non_hazard, outdir / "miss_distance_ecdf.html")
+    plot_ecdf_png(hazard, non_hazard, outdir / "miss_distance_ecdf.png", duplicate_count)
+    plot_ecdf_html(hazard, non_hazard, outdir / "miss_distance_ecdf.html", duplicate_count)
 
     plot_weekly_heatmap_html(df, outdir / "approaches_calendar_heatmap.html")
 

@@ -1,4 +1,5 @@
 import argparse
+import json
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -13,6 +14,8 @@ INTERPRETATION_NOTES = """# Interpretation Notes
 - The PHA (potentially hazardous asteroid) flag is not an impact prediction.
 - The energy_proxy metric is a heuristic signal; it is not a probability.
 - Rows represent close-approach events, not trajectories.
+- MOID (minimum orbit intersection distance) is a long-term orbital metric,
+  while close-approach distance is a specific event distance for a given date.
 - Recent months may be partial depending on the run window.
 """
 
@@ -20,6 +23,7 @@ INTERPRETATION_NOTES = """# Interpretation Notes
 def load_processed(data_dir: Path) -> pd.DataFrame:
     objects_path = data_dir / "objects.parquet"
     approaches_path = data_dir / "approaches.parquet"
+    orbits_path = data_dir / "orbits.parquet"
     missing = [path for path in [objects_path, approaches_path] if not path.exists()]
     if missing:
         missing_list = ", ".join(str(path) for path in missing)
@@ -43,6 +47,16 @@ def load_processed(data_dir: Path) -> pd.DataFrame:
         on="id",
         how="left",
     )
+    if orbits_path.exists():
+        orbits = pd.read_parquet(orbits_path)
+        # Ensure id column types match before merging
+        merged["id"] = merged["id"].astype(str)
+        orbits["id"] = orbits["id"].astype(str)
+        merged = merged.merge(
+            orbits[["id", "orbit_class_name", "minimum_orbit_intersection"]],
+            on="id",
+            how="left",
+        )
     return merged
 
 
@@ -53,6 +67,14 @@ def build_learning_reports(
     as_of_date: datetime | None = None,
 ):
     df = load_processed(data_dir)
+    metadata_path = data_dir / "metadata.json"
+    duplicate_count = 0
+    if metadata_path.exists():
+        try:
+            metadata = json.loads(metadata_path.read_text())
+            duplicate_count = int(metadata.get("duplicate_approach_id_count", 0) or 0)
+        except json.JSONDecodeError:
+            duplicate_count = 0
     df = df[df["orbiting_body"] == orbiting_body]
     df = df.dropna(subset=["close_approach_date"])
 
@@ -71,23 +93,29 @@ def build_learning_reports(
         & (df["close_approach_date"] <= window_end)
     ].sort_values("miss_distance_km")
 
-    watchlist = upcoming[
-        [
-            "name",
-            "close_approach_date",
-            "miss_distance_lunar",
-            "velocity_km_s",
-            "diameter_mid_m",
-            "is_potentially_hazardous_asteroid",
-            "is_sentry_object",
-            "nasa_jpl_url",
-        ]
-    ].rename(
+    watchlist_columns = [
+        "name",
+        "close_approach_date",
+        "miss_distance_lunar",
+        "velocity_km_s",
+        "diameter_mid_m",
+        "is_potentially_hazardous_asteroid",
+        "is_sentry_object",
+        "nasa_jpl_url",
+    ]
+    if "orbit_class_name" in upcoming.columns:
+        watchlist_columns.append("orbit_class_name")
+    if "minimum_orbit_intersection" in upcoming.columns:
+        watchlist_columns.append("minimum_orbit_intersection")
+
+    watchlist = upcoming[watchlist_columns].rename(
         columns={
             "close_approach_date": "date",
             "is_potentially_hazardous_asteroid": "hazardous",
             "is_sentry_object": "sentry",
             "nasa_jpl_url": "jpl_url",
+            "orbit_class_name": "orbit_class",
+            "minimum_orbit_intersection": "moid_au",
         }
     )
     watchlist.to_csv(outdir / "watchlist_next_90_days.csv", index=False)
@@ -117,6 +145,16 @@ def build_learning_reports(
         height=450,
         margin=dict(l=40, r=20, t=50, b=40),
     )
+    if duplicate_count > 0:
+        timeline_fig.add_annotation(
+            x=0.01,
+            y=0.01,
+            xref="paper",
+            yref="paper",
+            text=f"Note: {duplicate_count} duplicate approach_id values detected.",
+            showarrow=False,
+            align="left",
+        )
     timeline_fig.write_html(outdir / "near_misses_under_5LD.html")
 
     hazard_by_approach = (
@@ -158,7 +196,54 @@ def build_learning_reports(
         height=400,
         margin=dict(l=40, r=20, t=50, b=40),
     )
+    if duplicate_count > 0:
+        hazard_fig.add_annotation(
+            x=0.01,
+            y=0.01,
+            xref="paper",
+            yref="paper",
+            text=f"Note: {duplicate_count} duplicate approach_id values detected.",
+            showarrow=False,
+            align="left",
+        )
     hazard_fig.write_html(outdir / "hazard_vs_size_bins.html")
+
+    if "minimum_orbit_intersection" in df.columns:
+        moid_df = df.dropna(
+            subset=["minimum_orbit_intersection", "miss_distance_km"]
+        )
+        moid_fig = px.scatter(
+            moid_df,
+            x="minimum_orbit_intersection",
+            y="miss_distance_km",
+            color="is_potentially_hazardous_asteroid",
+            hover_data={
+                "name": True,
+                "id": True,
+                "close_approach_date": True,
+                "miss_distance_km": True,
+                "minimum_orbit_intersection": True,
+                "velocity_km_s": True,
+            },
+        )
+        moid_fig.update_layout(
+            title="MOID vs close-approach distance",
+            xaxis_title="Minimum orbit intersection (AU)",
+            yaxis_title="Miss distance (km)",
+            height=450,
+            margin=dict(l=40, r=20, t=50, b=40),
+        )
+        if duplicate_count > 0:
+            moid_fig.add_annotation(
+                x=0.01,
+                y=0.01,
+                xref="paper",
+                yref="paper",
+                text=f"Note: {duplicate_count} duplicate approach_id values detected.",
+                showarrow=False,
+                align="left",
+            )
+        moid_fig.write_html(outdir / "moid_vs_miss_distance.html")
 
     notes_path = outdir / "interpretation_notes.md"
     notes_path.write_text(INTERPRETATION_NOTES)

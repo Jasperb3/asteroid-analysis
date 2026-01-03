@@ -184,3 +184,34 @@ def test_good_cache_skip_fetch(tmp_path):
 
     assert calls["count"] == 0
     assert result == cache_path
+
+
+def test_failure_logging_includes_retry_context(tmp_path):
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+
+    def fake_fetcher(session, start_date, end_date, api_key):
+        raise ingest.FetchError(
+            "Throttle",
+            category="throttle",
+            http_status=429,
+            retry_attempt=5,
+            max_retries=5,
+        )
+
+    result = ingest.fetch_or_load_chunk(
+        session=None,
+        start_date=date(2024, 1, 1),
+        end_date=date(2024, 1, 7),
+        api_key="demo",
+        raw_dir=raw_dir,
+        refresh=True,
+        fetcher=fake_fetcher,
+    )
+
+    assert result is None
+    failures_path = raw_dir / "failures.csv"
+    rows = failures_path.read_text().splitlines()
+    assert rows[0].startswith("start_date,end_date,error,category,http_status,retry_attempt,max_retries")
+    assert "throttle" in rows[1]
+    assert "429" in rows[1]
