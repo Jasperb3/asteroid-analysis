@@ -30,18 +30,21 @@ def enrich(df: pd.DataFrame) -> pd.DataFrame:
         labels=MISS_LD_LABELS,
         right=False,
     )
+    df["miss_ld_bin"] = df["miss_ld_bin"].astype("category")
     df["size_bin_m"] = pd.cut(
         df["diameter_mid_m"],
         bins=SIZE_BINS_M,
         labels=SIZE_LABELS_M,
         right=False,
     )
+    df["size_bin_m"] = df["size_bin_m"].astype("category")
     df["velocity_bin_kms"] = pd.cut(
         df["velocity_km_s"],
         bins=VELOCITY_BINS_KMS,
         labels=VELOCITY_LABELS_KMS,
         right=False,
     )
+    df["velocity_bin_kms"] = df["velocity_bin_kms"].astype("category")
 
     df["energy_proxy"] = (df["diameter_mid_m"] ** 3) * (
         (df["velocity_km_s"] * 1000) ** 2
@@ -56,5 +59,10 @@ def enrich(df: pd.DataFrame) -> pd.DataFrame:
     df["rank_speed"] = rank_speed
 
     df["interesting_score"] = 0.5 * rank_close + 0.3 * rank_size + 0.2 * rank_speed
+
+    if "orbiting_body" in df.columns:
+        df["orbiting_body"] = df["orbiting_body"].astype("category")
+    if "orbit_class_name" in df.columns:
+        df["orbit_class_name"] = df["orbit_class_name"].astype("category")
 
     return df

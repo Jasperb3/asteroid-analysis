@@ -18,7 +18,7 @@ def test_cache_skip_logic(tmp_path):
     raw_dir = tmp_path / "data/raw"
     raw_dir.mkdir(parents=True)
     cache_path = raw_dir / "feed_2024-01-01_2024-01-07.json"
-    cache_path.write_text("{}")
+    cache_path.write_text(json.dumps({"near_earth_objects": {}}))
 
     calls = {"count": 0}
 
@@ -102,3 +102,85 @@ def test_schema_columns_present(tmp_path):
 
     df = ingest.build_dataframe_from_cache([cache_path], "Earth")
     assert list(df.columns) == ingest.SCHEMA_COLUMNS
+
+
+def test_corrupt_cache_refetch_and_log(tmp_path):
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    cache_path = raw_dir / "feed_2024-01-01_2024-01-07.json"
+    cache_path.write_text("{bad json")
+
+    calls = {"count": 0}
+
+    def fake_fetcher(session, start_date, end_date, api_key):
+        calls["count"] += 1
+        return {"near_earth_objects": {}}
+
+    result = ingest.fetch_or_load_chunk(
+        session=None,
+        start_date=date(2024, 1, 1),
+        end_date=date(2024, 1, 7),
+        api_key="demo",
+        raw_dir=raw_dir,
+        refresh=False,
+        fetcher=fake_fetcher,
+    )
+
+    assert calls["count"] == 1
+    assert result == cache_path
+    failures_path = raw_dir / "failures.csv"
+    assert failures_path.exists()
+
+
+def test_invalid_schema_refetch_and_log(tmp_path):
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    cache_path = raw_dir / "feed_2024-01-01_2024-01-07.json"
+    cache_path.write_text(json.dumps({"foo": "bar"}))
+
+    calls = {"count": 0}
+
+    def fake_fetcher(session, start_date, end_date, api_key):
+        calls["count"] += 1
+        return {"near_earth_objects": {}}
+
+    result = ingest.fetch_or_load_chunk(
+        session=None,
+        start_date=date(2024, 1, 1),
+        end_date=date(2024, 1, 7),
+        api_key="demo",
+        raw_dir=raw_dir,
+        refresh=False,
+        fetcher=fake_fetcher,
+    )
+
+    assert calls["count"] == 1
+    assert result == cache_path
+    failures_path = raw_dir / "failures.csv"
+    assert failures_path.exists()
+
+
+def test_good_cache_skip_fetch(tmp_path):
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    cache_path = raw_dir / "feed_2024-01-01_2024-01-07.json"
+    cache_path.write_text(json.dumps({"near_earth_objects": {}}))
+
+    calls = {"count": 0}
+
+    def fake_fetcher(session, start_date, end_date, api_key):
+        calls["count"] += 1
+        return {"near_earth_objects": {}}
+
+    result = ingest.fetch_or_load_chunk(
+        session=None,
+        start_date=date(2024, 1, 1),
+        end_date=date(2024, 1, 7),
+        api_key="demo",
+        raw_dir=raw_dir,
+        refresh=False,
+        fetcher=fake_fetcher,
+    )
+
+    assert calls["count"] == 0
+    assert result == cache_path

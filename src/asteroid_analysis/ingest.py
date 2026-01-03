@@ -77,14 +77,70 @@ def fetch_chunk(session: requests.Session, start_date: date, end_date: date, api
         raise RuntimeError(f"API error {response.status_code}: {response.text}")
 
 
-def _write_failure(raw_dir: Path, start_date: date, end_date: date, error: str):
+def _write_failure(
+    raw_dir: Path, start_date: date | None, end_date: date | None, error: str
+):
     failures_path = raw_dir / "failures.csv"
     write_header = not failures_path.exists()
     with failures_path.open("a", newline="") as handle:
         writer = csv.writer(handle)
         if write_header:
             writer.writerow(["start_date", "end_date", "error"])
-        writer.writerow([start_date.isoformat(), end_date.isoformat(), error])
+        start_value = start_date.isoformat() if start_date else ""
+        end_value = end_date.isoformat() if end_date else ""
+        writer.writerow([start_value, end_value, error])
+
+
+def _parse_chunk_range_from_path(cache_path: Path):
+    name = cache_path.stem
+    if not name.startswith("feed_"):
+        return None, None
+    parts = name.split("_")
+    if len(parts) != 3:
+        return None, None
+    try:
+        start_date = datetime.strptime(parts[1], "%Y-%m-%d").date()
+        end_date = datetime.strptime(parts[2], "%Y-%m-%d").date()
+    except ValueError:
+        return None, None
+    return start_date, end_date
+
+
+def _validate_payload(payload: dict) -> None:
+    if not isinstance(payload, dict):
+        raise ValueError("Invalid payload type")
+    if "near_earth_objects" not in payload or not isinstance(
+        payload.get("near_earth_objects"), dict
+    ):
+        raise ValueError("Missing or invalid near_earth_objects")
+
+
+def _read_cache_payload(
+    cache_path: Path, raw_dir: Path, start_date: date | None, end_date: date | None
+):
+    try:
+        payload = json.loads(cache_path.read_text())
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        error = f"Corrupt cache JSON {cache_path}: {exc}"
+        print(error)
+        _write_failure(raw_dir, start_date, end_date, error)
+        return None
+
+    try:
+        _validate_payload(payload)
+    except ValueError as exc:
+        error = f"Invalid cache schema {cache_path}: {exc}"
+        print(error)
+        _write_failure(raw_dir, start_date, end_date, error)
+        return None
+
+    return payload
+
+
+def _write_cache_atomic(cache_path: Path, payload: dict):
+    temp_path = cache_path.with_suffix(cache_path.suffix + ".tmp")
+    temp_path.write_text(json.dumps(payload))
+    temp_path.replace(cache_path)
 
 
 def fetch_or_load_chunk(
@@ -99,16 +155,19 @@ def fetch_or_load_chunk(
     raw_dir.mkdir(parents=True, exist_ok=True)
     cache_path = raw_dir / f"feed_{start_date.isoformat()}_{end_date.isoformat()}.json"
     if cache_path.exists() and not refresh:
-        return cache_path
+        cached_payload = _read_cache_payload(cache_path, raw_dir, start_date, end_date)
+        if cached_payload is not None:
+            return cache_path
 
     try:
         payload = fetcher(session, start_date, end_date, api_key)
+        _validate_payload(payload)
     except Exception as exc:
         print(f"Failed chunk {start_date}..{end_date}: {exc}")
         _write_failure(raw_dir, start_date, end_date, str(exc))
         return None
 
-    cache_path.write_text(json.dumps(payload))
+    _write_cache_atomic(cache_path, payload)
     return cache_path
 
 
@@ -119,7 +178,11 @@ def build_dataframe_from_cache(cache_paths, orbiting_body: str) -> pd.DataFrame:
     for cache_path in cache_paths:
         if cache_path is None or not Path(cache_path).exists():
             continue
-        data = json.loads(Path(cache_path).read_text())
+        cache_path = Path(cache_path)
+        start_date, end_date = _parse_chunk_range_from_path(cache_path)
+        data = _read_cache_payload(cache_path, RAW_DIR, start_date, end_date)
+        if data is None:
+            continue
         neo_map = data.get("near_earth_objects", {})
 
         for _, asteroids in neo_map.items():

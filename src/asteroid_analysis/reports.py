@@ -14,12 +14,23 @@ import plotly.graph_objects as go
 from asteroid_analysis.features import enrich
 
 
-DATA_DIR = Path("data/processed")
+DEFAULT_DATA_DIR = Path("data/processed")
 
 
 def load_joined(data_dir: Path) -> pd.DataFrame:
-    objects = pd.read_parquet(data_dir / "objects.parquet")
-    approaches = pd.read_parquet(data_dir / "approaches.parquet")
+    objects_path = data_dir / "objects.parquet"
+    approaches_path = data_dir / "approaches.parquet"
+    missing = [path for path in [objects_path, approaches_path] if not path.exists()]
+    if missing:
+        missing_list = ", ".join(str(path) for path in missing)
+        raise FileNotFoundError(
+            "Missing processed parquet files: "
+            f"{missing_list}. Run: python -m asteroid_analysis.build "
+            f"--input asteroid_data_full.csv --outdir {data_dir}"
+        )
+
+    objects = pd.read_parquet(objects_path)
+    approaches = pd.read_parquet(approaches_path)
 
     # Only merge columns from objects that are not already in approaches
     # Both dataframes have 'id', 'is_potentially_hazardous_asteroid', 'is_sentry_object'
@@ -216,11 +227,17 @@ def plot_weekly_heatmap_html(df: pd.DataFrame, output_path: Path) -> None:
     fig.write_html(output_path)
 
 
-def build_reports(outdir: Path, orbiting_body: str) -> None:
-    df = load_joined(DATA_DIR)
+def build_reports(outdir: Path, orbiting_body: str, data_dir: Path = DEFAULT_DATA_DIR) -> None:
+    df = load_joined(data_dir)
     df = df[df["orbiting_body"] == orbiting_body]
     df = df.dropna(subset=["close_approach_date", "miss_distance_km"])
     df = enrich(df)
+    if df.empty:
+        print(
+            "No data available after filtering. "
+            "Check orbiting body or run build to regenerate processed tables."
+        )
+        return
 
     outdir.mkdir(parents=True, exist_ok=True)
 
@@ -249,9 +266,14 @@ def main():
         default="Earth",
         help="Orbiting body to filter approaches by.",
     )
+    parser.add_argument(
+        "--data-dir",
+        default="data/processed",
+        help="Directory containing processed parquet tables.",
+    )
     args = parser.parse_args()
 
-    build_reports(Path(args.outdir), args.orbiting_body)
+    build_reports(Path(args.outdir), args.orbiting_body, Path(args.data_dir))
 
 
 if __name__ == "__main__":

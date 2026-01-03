@@ -14,33 +14,67 @@ from asteroid_analysis.metadata import build_metadata, write_metadata
 
 DATA_DIR = Path("data/processed")
 
+REQUIRED_OBJECT_COLUMNS = [
+    "id",
+    "name",
+    "nasa_jpl_url",
+    "absolute_magnitude_h",
+    "is_potentially_hazardous_asteroid",
+    "is_sentry_object",
+    "diameter_km_min",
+    "diameter_km_max",
+    "diameter_mid_km",
+    "diameter_m_min",
+    "diameter_m_max",
+    "diameter_mid_m",
+]
 
-@st.cache_data(show_spinner="Loading data...")
-def load_data(data_dir: Path):
+REQUIRED_APPROACH_COLUMNS = [
+    "id",
+    "close_approach_date",
+    "close_approach_date_full",
+    "epoch_date_close_approach",
+    "velocity_km_s",
+    "velocity_km_h",
+    "velocity_mph",
+    "miss_distance_astronomical",
+    "miss_distance_lunar",
+    "miss_distance_km",
+    "miss_distance_miles",
+    "orbiting_body",
+]
+
+
+def get_missing_processed_paths(data_dir: Path):
+    objects_path = data_dir / "objects.parquet"
+    approaches_path = data_dir / "approaches.parquet"
+    missing = [path for path in [objects_path, approaches_path] if not path.exists()]
+    return missing
+
+
+def get_data_mtimes(data_dir: Path):
     objects_path = data_dir / "objects.parquet"
     approaches_path = data_dir / "approaches.parquet"
     orbits_path = data_dir / "orbits.parquet"
+    aggregates_path = data_dir / "aggregates.parquet"
+    return (
+        objects_path.stat().st_mtime if objects_path.exists() else 0,
+        approaches_path.stat().st_mtime if approaches_path.exists() else 0,
+        orbits_path.stat().st_mtime if orbits_path.exists() else 0,
+        aggregates_path.stat().st_mtime if aggregates_path.exists() else 0,
+    )
+
+
+def load_dataframes(data_dir: Path):
+    objects_path = data_dir / "objects.parquet"
+    approaches_path = data_dir / "approaches.parquet"
+    orbits_path = data_dir / "orbits.parquet"
+    aggregates_path = data_dir / "aggregates.parquet"
 
     objects = pd.read_parquet(objects_path)
     approaches = pd.read_parquet(approaches_path)
-
     merged = approaches.merge(
-        objects[
-            [
-                "id",
-                "name",
-                "nasa_jpl_url",
-                "absolute_magnitude_h",
-                "is_potentially_hazardous_asteroid",
-                "is_sentry_object",
-                "diameter_km_min",
-                "diameter_km_max",
-                "diameter_mid_km",
-                "diameter_m_min",
-                "diameter_m_max",
-                "diameter_mid_m",
-            ]
-        ],
+        objects[REQUIRED_OBJECT_COLUMNS],
         on="id",
         how="left",
     )
@@ -50,7 +84,16 @@ def load_data(data_dir: Path):
         orbits = pd.read_parquet(orbits_path)
         merged = merged.merge(orbits, on="id", how="left")
 
-    return objects, approaches, merged, orbits
+    aggregates = None
+    if aggregates_path.exists():
+        aggregates = pd.read_parquet(aggregates_path)
+
+    return objects, approaches, merged, orbits, aggregates
+
+
+@st.cache_data(show_spinner="Loading data...")
+def load_data(data_dir: Path, mtimes):
+    return load_dataframes(data_dir)
 
 
 def build_monthly_heatmap(df: pd.DataFrame) -> go.Figure:
@@ -103,12 +146,33 @@ def main():
     st.set_page_config(page_title="Asteroid Approaches Explorer", layout="wide")
     st.title("Asteroid Close Approaches Explorer")
 
-    objects, approaches, merged, orbits = load_data(DATA_DIR)
+    missing = get_missing_processed_paths(DATA_DIR)
+    if missing:
+        st.error(
+            "Missing processed tables: "
+            + ", ".join(str(path) for path in missing)
+            + "\nRun: python -m asteroid_analysis.build --input asteroid_data_full.csv --outdir data/processed"
+        )
+        st.stop()
+
+    mtimes = get_data_mtimes(DATA_DIR)
+    objects, approaches, merged, orbits, aggregates = load_data(DATA_DIR, mtimes)
+
+    if merged.empty:
+        st.warning("Processed tables are empty. Run ingestion/build to populate data.")
+        st.stop()
 
     st.sidebar.header("Filters")
+    st.sidebar.header("Maintenance")
+    if st.sidebar.button("Clear app cache"):
+        st.cache_data.clear()
+        st.rerun()
 
     min_date = merged["close_approach_date"].min()
     max_date = merged["close_approach_date"].max()
+    if pd.isna(min_date) or pd.isna(max_date):
+        st.error("Missing close_approach_date values in processed data.")
+        st.stop()
     date_range = st.sidebar.date_input(
         "Close approach date range",
         value=(min_date.date(), max_date.date()),
@@ -122,40 +186,46 @@ def main():
     )
     sentry_only = st.sidebar.checkbox("Sentry objects only", value=False)
 
-    miss_min, miss_max = (
-        float(merged["miss_distance_km"].min()),
-        float(merged["miss_distance_km"].max()),
-    )
+    miss_values = merged["miss_distance_km"].dropna()
+    miss_disabled = miss_values.empty
+    miss_min = float(miss_values.min()) if not miss_disabled else 0.0
+    miss_max = float(miss_values.max()) if not miss_disabled else 0.0
     miss_range = st.sidebar.slider(
         "Miss distance (km)",
         min_value=miss_min,
         max_value=miss_max,
         value=(miss_min, miss_max),
+        disabled=miss_disabled,
     )
 
-    vel_min, vel_max = (
-        float(merged["velocity_km_s"].min()),
-        float(merged["velocity_km_s"].max()),
-    )
+    vel_values = merged["velocity_km_s"].dropna()
+    vel_disabled = vel_values.empty
+    vel_min = float(vel_values.min()) if not vel_disabled else 0.0
+    vel_max = float(vel_values.max()) if not vel_disabled else 0.0
     vel_range = st.sidebar.slider(
         "Velocity (km/s)",
         min_value=vel_min,
         max_value=vel_max,
         value=(vel_min, vel_max),
+        disabled=vel_disabled,
     )
 
-    diam_min, diam_max = (
-        float(merged["diameter_mid_km"].min()),
-        float(merged["diameter_mid_km"].max()),
-    )
+    diam_values = merged["diameter_mid_km"].dropna()
+    diam_disabled = diam_values.empty
+    diam_min = float(diam_values.min()) if not diam_disabled else 0.0
+    diam_max = float(diam_values.max()) if not diam_disabled else 0.0
     diam_range = st.sidebar.slider(
         "Diameter mid (km)",
         min_value=diam_min,
         max_value=diam_max,
         value=(diam_min, diam_max),
+        disabled=diam_disabled,
     )
 
     orbiting_options = sorted(merged["orbiting_body"].dropna().unique().tolist())
+    if not orbiting_options:
+        st.error("No orbiting body values available in processed data.")
+        st.stop()
     default_orbit = orbiting_options.index("Earth") if "Earth" in orbiting_options else 0
     orbiting_body = st.sidebar.selectbox(
         "Orbiting body",
@@ -165,6 +235,8 @@ def main():
 
     orbit_class_filter = None
     moid_range = None
+    moid_min = None
+    moid_max = None
     if orbits is not None and "orbit_class_name" in merged.columns:
         classes = sorted(merged["orbit_class_name"].dropna().unique().tolist())
         orbit_class_filter = st.sidebar.selectbox(
@@ -222,6 +294,10 @@ def main():
 
     filtered = enrich(filtered)
 
+    if filtered.empty:
+        st.warning("No data matches the current filters.")
+        st.stop()
+
     pre_counts = {
         "total_approaches": len(merged),
         "unique_objects": merged["id"].nunique(),
@@ -245,6 +321,23 @@ def main():
         ["Overview", "Size vs Distance", "Rankings", "Apophis", "Reports"]
     )
 
+    aggregates_ready = (
+        aggregates is not None
+        and "aggregate_type" in aggregates.columns
+        and "orbiting_body" in aggregates.columns
+    )
+    default_filters = (
+        date_range == (min_date.date(), max_date.date())
+        and hazard_filter == "All"
+        and not sentry_only
+        and (miss_range == (miss_min, miss_max) if not miss_disabled else True)
+        and (vel_range == (vel_min, vel_max) if not vel_disabled else True)
+        and (diam_range == (diam_min, diam_max) if not diam_disabled else True)
+        and (orbit_class_filter in (None, "All"))
+        and (moid_range is None or moid_range == (moid_min, moid_max))
+    )
+    use_aggregates = aggregates_ready and default_filters
+
     with tab_overview:
         st.subheader("Key metrics (filtered vs all)")
         metrics = [
@@ -261,14 +354,24 @@ def main():
             cols[idx % 3].metric(label, post_counts[key], delta=delta)
 
         st.subheader("Approaches per month")
-        monthly = (
-            filtered.set_index("close_approach_date")
-            .sort_index()
-            .resample("M")
-            .size()
-            .rename("count")
-            .reset_index()
-        )
+        if use_aggregates:
+            monthly = aggregates[aggregates["aggregate_type"] == "monthly_counts"]
+            monthly = monthly[monthly["orbiting_body"] == orbiting_body]
+            monthly = (
+                monthly.groupby("month", dropna=False)["count"]
+                .sum()
+                .reset_index()
+                .rename(columns={"month": "close_approach_date"})
+            )
+        else:
+            monthly = (
+                filtered.set_index("close_approach_date")
+                .sort_index()
+                .resample("M")
+                .size()
+                .rename("count")
+                .reset_index()
+            )
         line_fig = px.line(monthly, x="close_approach_date", y="count")
         line_fig.update_layout(height=300, margin=dict(l=40, r=20, t=30, b=40))
 
@@ -295,15 +398,19 @@ def main():
         st.plotly_chart(build_monthly_heatmap(filtered), use_container_width=True)
 
         st.subheader("Hazard rate by size bin")
-        size_counts = (
-            filtered.groupby("size_bin_m", dropna=False)
-            .agg(
-                total=("id", "size"),
-                hazardous=("is_potentially_hazardous_asteroid", "sum"),
+        if use_aggregates:
+            size_counts = aggregates[aggregates["aggregate_type"] == "hazard_rate_size"]
+            size_counts = size_counts[size_counts["orbiting_body"] == orbiting_body]
+        else:
+            size_counts = (
+                filtered.groupby("size_bin_m", dropna=False)
+                .agg(
+                    total=("id", "size"),
+                    hazardous=("is_potentially_hazardous_asteroid", "sum"),
+                )
+                .reset_index()
             )
-            .reset_index()
-        )
-        size_counts["hazard_rate"] = size_counts["hazardous"] / size_counts["total"]
+            size_counts["hazard_rate"] = size_counts["hazardous"] / size_counts["total"]
         bar_fig = px.bar(
             size_counts,
             x="size_bin_m",
@@ -476,7 +583,7 @@ def main():
         report_outdir = st.text_input("Output directory", value="outputs/reports")
         report_body = st.text_input("Orbiting body", value=orbiting_body)
         if st.button("Generate reports"):
-            build_reports(Path(report_outdir), report_body)
+            build_reports(Path(report_outdir), report_body, DATA_DIR)
             st.success(f"Reports written to {report_outdir}")
 
     metadata = build_metadata(

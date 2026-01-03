@@ -112,8 +112,16 @@ This writes `objects.parquet`, `approaches.parquet`, and `metadata.json`.
 ### Generate Reports
 
 ```bash
-python -m asteroid_analysis.reports --outdir outputs/reports --orbiting-body Earth
+python -m asteroid_analysis.reports --outdir outputs/reports --orbiting-body Earth --data-dir data/processed
 ```
+
+### Learning Reports
+
+```bash
+python -m asteroid_analysis.learning_reports --data-dir data/processed --outdir outputs/learning --orbiting-body Earth
+```
+
+Outputs include a 90-day watchlist, near-miss storyboard, hazard vs size bins, and interpretation notes.
 
 ### Optional Orbit Enrichment
 
@@ -130,7 +138,7 @@ streamlit run src/asteroid_analysis/app.py
 ### One-Command Pipeline
 
 ```bash
-python -m asteroid_analysis.cli all --start 2024-01-01 --end 2039-12-31 --orbiting-body Earth
+python -m asteroid_analysis.cli all --start 2024-01-01 --end 2039-12-31 --orbiting-body Earth --raw-dir data/raw --processed-dir data/processed --reports-dir outputs/reports
 ```
 
 ## Development
@@ -157,10 +165,17 @@ python -m asteroid_analysis.build --input asteroid_data_full.csv --outdir data/p
 streamlit run src/asteroid_analysis/app.py
 ```
 
+Custom output directories:
+
+```bash
+python -m asteroid_analysis.build --input asteroid_data_full.csv --outdir data/processed_custom
+python -m asteroid_analysis.reports --outdir outputs/reports --orbiting-body Earth --data-dir data/processed_custom
+```
+
 Pipeline CLI:
 
 ```bash
-python -m asteroid_analysis.cli all --start 2024-01-01 --end 2039-12-31 --orbiting-body Earth
+python -m asteroid_analysis.cli all --start 2024-01-01 --end 2039-12-31 --orbiting-body Earth --raw-dir data/raw --processed-dir data/processed --reports-dir outputs/reports
 ```
 
 ## Data Structure

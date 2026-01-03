@@ -1,6 +1,8 @@
 import pandas as pd
+import pytest
 
 from asteroid_analysis.reports import compute_ecdf, compute_monthly_quantiles
+from asteroid_analysis import reports
 
 
 def test_monthly_quantiles_shape():
@@ -29,3 +31,11 @@ def test_ecdf_monotonic():
     ecdf = compute_ecdf(series)
     assert ecdf["x"].is_monotonic_increasing
     assert ecdf["y"].is_monotonic_increasing
+
+
+def test_reports_missing_parquet(tmp_path):
+    data_dir = tmp_path / "processed"
+    data_dir.mkdir()
+    with pytest.raises(FileNotFoundError) as excinfo:
+        reports.load_joined(data_dir)
+    assert "python -m asteroid_analysis.build" in str(excinfo.value)

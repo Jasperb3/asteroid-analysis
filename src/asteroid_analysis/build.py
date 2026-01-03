@@ -1,10 +1,12 @@
 import argparse
+import hashlib
 import math
 from pathlib import Path
 
 import pandas as pd
 
 from asteroid_analysis.metadata import build_metadata, write_metadata
+from asteroid_analysis.features import enrich
 REQUIRED_COLUMNS = [
     "date",
     "id",
@@ -83,6 +85,18 @@ def _first_non_null(series: pd.Series):
     return non_null.iloc[0]
 
 
+def _stable_suffix(row: pd.Series) -> str:
+    parts = [
+        str(row.get("id", "")),
+        str(row.get("close_approach_date", "")),
+        str(row.get("close_approach_date_full", "")),
+        str(row.get("miss_distance_km", "")),
+        str(row.get("velocity_km_s", "")),
+    ]
+    digest = hashlib.md5("|".join(parts).encode("utf-8")).hexdigest()
+    return digest[:8]
+
+
 def process_dataframe(df: pd.DataFrame):
     missing = sorted(set(REQUIRED_COLUMNS) - set(df.columns))
     if missing:
@@ -121,10 +135,14 @@ def process_dataframe(df: pd.DataFrame):
     )
     df.loc[df["diameter_mid_km"] == 0, "diameter_uncertainty_ratio_km"] = pd.NA
 
-    epoch_str = df["epoch_date_close_approach"].apply(
-        lambda value: str(int(value)) if pd.notna(value) else "nan"
+    epoch_series = df["epoch_date_close_approach"]
+    epoch_str = epoch_series.apply(
+        lambda value: str(int(value)) if pd.notna(value) else None
     )
-    df["approach_id"] = df["id"].astype(str) + "_" + epoch_str
+    suffix = epoch_str.fillna(
+        df.apply(_stable_suffix, axis=1)
+    )
+    df["approach_id"] = df["id"].astype(str) + "_" + suffix
 
     # Remove log columns from the columns to be grouped
     object_fields = [col for col in OBJECT_COLUMNS if col != "id" and col != "log_diameter_mid_km"]
@@ -146,13 +164,116 @@ def process_dataframe(df: pd.DataFrame):
         "is_potentially_hazardous_asteroid"
     ]
     approaches["is_sentry_object"] = df["is_sentry_object"]
-    approaches = approaches.drop_duplicates("approach_id", keep="first")
+    approaches = _handle_duplicates(approaches)
+    if "orbiting_body" in approaches.columns:
+        approaches["orbiting_body"] = approaches["orbiting_body"].astype("category")
 
     return objects, approaches
 
 
+def compute_aggregates(approaches: pd.DataFrame, objects: pd.DataFrame) -> pd.DataFrame:
+    merged = approaches.merge(
+        objects[["id", "name", "diameter_mid_m", "diameter_mid_km"]],
+        on="id",
+        how="left",
+    )
+    enriched = enrich(merged)
+
+    monthly = (
+        enriched.assign(
+            month=enriched["close_approach_date"].dt.to_period("M").dt.to_timestamp()
+        )
+        .groupby(
+            ["orbiting_body", "is_potentially_hazardous_asteroid", "month"],
+            dropna=False,
+            observed=False,
+        )
+        .size()
+        .reset_index(name="count")
+    )
+    monthly["aggregate_type"] = "monthly_counts"
+
+    hazard_rate = (
+        enriched.groupby(["orbiting_body", "size_bin_m"], dropna=False, observed=False)
+        .agg(
+            total=("id", "size"),
+            hazardous=("is_potentially_hazardous_asteroid", "sum"),
+        )
+        .reset_index()
+    )
+    hazard_rate["hazard_rate"] = hazard_rate["hazardous"] / hazard_rate["total"]
+    hazard_rate["aggregate_type"] = "hazard_rate_size"
+
+    top_rows = []
+    metrics = [
+        ("closest", "miss_distance_km", True),
+        ("largest", "diameter_mid_km", False),
+        ("fastest", "velocity_km_s", False),
+        ("energy_proxy", "energy_proxy", False),
+    ]
+    for orbit_body, subset in enriched.groupby(
+        "orbiting_body", dropna=False, observed=False
+    ):
+        for metric_name, metric_col, ascending in metrics:
+            if metric_col not in subset.columns:
+                continue
+            ranked = subset.sort_values(metric_col, ascending=ascending).head(50)
+            if ranked.empty:
+                continue
+            ranked = ranked[
+                [
+                    "id",
+                    "name",
+                    "close_approach_date",
+                    "miss_distance_km",
+                    "velocity_km_s",
+                    "diameter_mid_km",
+                    "energy_proxy",
+                ]
+            ].copy()
+            ranked["aggregate_type"] = "top_n"
+            ranked["metric"] = metric_name
+            ranked["orbiting_body"] = orbit_body
+            top_rows.append(ranked)
+
+    top_df = pd.concat(top_rows, ignore_index=True) if top_rows else pd.DataFrame()
+
+    aggregates = pd.concat([monthly, hazard_rate, top_df], ignore_index=True, sort=False)
+    return aggregates
+
+
+def _handle_duplicates(approaches: pd.DataFrame) -> pd.DataFrame:
+    duplicate_mask = approaches.duplicated("approach_id", keep=False)
+    if not duplicate_mask.any():
+        return approaches
+
+    duplicate_ids = approaches.loc[duplicate_mask, "approach_id"].unique()
+    sample_ids = ", ".join(list(duplicate_ids)[:3])
+    print(
+        f"Warning: {len(duplicate_ids)} duplicate approach_id values detected. "
+        f"Samples: {sample_ids}"
+    )
+
+    exact_dupes = approaches.duplicated(keep="first")
+    if exact_dupes.any():
+        dropped = int(exact_dupes.sum())
+        approaches = approaches[~exact_dupes]
+        print(f"Dropped {dropped} exact duplicate rows.")
+
+    return approaches
+
+
 def build_tables(input_path: Path, outdir: Path):
     df = pd.read_csv(input_path)
+    if df.empty:
+        raise ValueError(f"Input CSV is empty: {input_path}")
+
+    missing = sorted(set(REQUIRED_COLUMNS) - set(df.columns))
+    if missing:
+        raise ValueError(
+            f"Input CSV missing required columns: {', '.join(missing)}"
+        )
+
     objects, approaches = process_dataframe(df)
 
     outdir.mkdir(parents=True, exist_ok=True)
@@ -163,6 +284,9 @@ def build_tables(input_path: Path, outdir: Path):
     objects.to_csv(f"{objects_path}.csv", index=False)
     approaches.to_parquet(f"{approaches_path}.parquet", index=False)
     approaches.to_csv(f"{approaches_path}.csv", index=False)
+    aggregates = compute_aggregates(approaches, objects)
+    aggregates_path = outdir / "aggregates.parquet"
+    aggregates.to_parquet(aggregates_path, index=False)
 
     metadata = build_metadata(
         df=approaches,

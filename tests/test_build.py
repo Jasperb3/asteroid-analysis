@@ -77,3 +77,69 @@ def test_derived_columns_safe_on_zeros():
     assert "log_diameter_mid_km" in objects.columns
     assert pd.isna(approaches.loc[0, "log_miss_distance_km"])
     assert pd.isna(objects.loc[0, "log_diameter_mid_km"])
+
+
+def test_missing_epoch_generates_unique_ids():
+    df = pd.DataFrame(
+        [
+            {
+                "date": "2029-01-01",
+                "id": "2001",
+                "neo_reference_id": "2001",
+                "name": "Test",
+                "nasa_jpl_url": "http://example.com",
+                "absolute_magnitude_h": 22.0,
+                "is_potentially_hazardous_asteroid": False,
+                "is_sentry_object": False,
+                "diameter_km_min": 0.1,
+                "diameter_km_max": 0.2,
+                "diameter_m_min": 100.0,
+                "diameter_m_max": 200.0,
+                "close_approach_date": "2029-01-01",
+                "close_approach_date_full": "2029-01-01 00:00",
+                "epoch_date_close_approach": None,
+                "velocity_km_s": 10.0,
+                "velocity_km_h": 36000.0,
+                "velocity_mph": 22369.0,
+                "miss_distance_astronomical": 0.02,
+                "miss_distance_lunar": 7.8,
+                "miss_distance_km": 50000.0,
+                "miss_distance_miles": 31068.0,
+                "orbiting_body": "Earth",
+            },
+            {
+                "date": "2029-01-02",
+                "id": "2001",
+                "neo_reference_id": "2001",
+                "name": "Test",
+                "nasa_jpl_url": "http://example.com",
+                "absolute_magnitude_h": 22.0,
+                "is_potentially_hazardous_asteroid": False,
+                "is_sentry_object": False,
+                "diameter_km_min": 0.1,
+                "diameter_km_max": 0.2,
+                "diameter_m_min": 100.0,
+                "diameter_m_max": 200.0,
+                "close_approach_date": "2029-01-02",
+                "close_approach_date_full": None,
+                "epoch_date_close_approach": None,
+                "velocity_km_s": 12.0,
+                "velocity_km_h": 43200.0,
+                "velocity_mph": 26822.0,
+                "miss_distance_astronomical": 0.03,
+                "miss_distance_lunar": 11.7,
+                "miss_distance_km": 60000.0,
+                "miss_distance_miles": 37280.0,
+                "orbiting_body": "Earth",
+            },
+        ]
+    )
+    _, approaches = build.process_dataframe(df)
+    assert approaches["approach_id"].is_unique
+
+
+def test_exact_duplicate_rows_dropped():
+    df = _sample_df()
+    df = pd.concat([df, df.iloc[[0]]], ignore_index=True)
+    _, approaches = build.process_dataframe(df)
+    assert approaches["approach_id"].is_unique

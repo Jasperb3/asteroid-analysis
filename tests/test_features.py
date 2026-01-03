@@ -24,6 +24,9 @@ def test_bin_edges_and_labels():
         ">1km",
     ]
     assert enriched["velocity_bin_kms"].tolist() == ["<10", "10-20", "20-30", ">30", ">30", ">30"]
+    assert str(enriched["size_bin_m"].dtype) == "category"
+    assert str(enriched["miss_ld_bin"].dtype) == "category"
+    assert str(enriched["velocity_bin_kms"].dtype) == "category"
 
 
 def test_energy_proxy_non_negative():

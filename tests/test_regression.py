@@ -31,6 +31,7 @@ def test_build_outputs_schema_and_types():
     assert ptypes.is_bool_dtype(approaches["is_potentially_hazardous_asteroid"])
     assert ptypes.is_bool_dtype(objects["is_sentry_object"])
     assert ptypes.is_numeric_dtype(approaches["miss_distance_km"])
+    assert str(approaches["orbiting_body"].dtype) == "category"
 
 
 def test_no_negative_distances_or_velocities():
@@ -46,7 +47,7 @@ def test_approach_id_unique_after_dedupe():
     assert approaches["approach_id"].is_unique
 
 
-def test_reports_smoke(tmp_path, monkeypatch):
+def test_reports_smoke(tmp_path):
     df = _load_fixture_df()
     objects, approaches = build.process_dataframe(df)
 
@@ -55,10 +56,8 @@ def test_reports_smoke(tmp_path, monkeypatch):
     objects.to_parquet(data_dir / "objects.parquet", index=False)
     approaches.to_parquet(data_dir / "approaches.parquet", index=False)
 
-    monkeypatch.setattr(reports, "DATA_DIR", data_dir)
-
     outdir = tmp_path / "outputs/reports"
-    reports.build_reports(outdir, "Earth")
+    reports.build_reports(outdir, "Earth", data_dir)
 
     assert (outdir / "miss_distance_quantiles.png").exists()
     assert (outdir / "miss_distance_quantiles.html").exists()
